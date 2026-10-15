@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chord Progression Web Audio Player</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4">
+<div class="max-w-3xl mx-auto">
+  <h1 class="text-2xl font-bold text-center mb-2 text-blue-400">Chord Progression Player</h1>
+  <p class="text-center text-gray-400 text-sm mb-4">Build chord progressions and play them with Web Audio API</p>
+
+  <div class="bg-gray-800 rounded p-4 mb-4">
+    <h2 class="text-sm font-semibold text-yellow-400 mb-3">Chord Palette</h2>
+    <div class="grid grid-cols-4 md:grid-cols-8 gap-1 mb-2" id="chordPalette"></div>
+  </div>
+
+  <div class="bg-gray-800 rounded p-4 mb-4">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-sm font-semibold text-yellow-400">Progression (max 8)</h2>
+      <button onclick="clearProgression()" class="text-xs text-red-400 hover:text-red-300">Clear</button>
+    </div>
+    <div class="flex gap-1 flex-wrap min-h-12 mb-3" id="progression"></div>
+
+    <div class="flex gap-3 items-center flex-wrap">
+      <div>
+        <label for="bpm" class="text-xs text-gray-400 mr-1">BPM:</label>
+        <input type="number" id="bpm" value="80" min="40" max="200" class="w-16 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm" aria-label="BPM">
+      </div>
+      <div class="flex gap-1">
+        <button id="playBtn" onclick="togglePlay()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-sm font-medium">▶ Play</button>
+        <button id="loopBtn" onclick="toggleLoop()" class="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded text-sm">Loop: OFF</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-gray-800 rounded p-4">
+    <h2 class="text-sm font-semibold text-yellow-400 mb-2">Quick Presets</h2>
+    <div class="flex flex-wrap gap-2">
+      <button onclick="loadPreset('I-IV-V-I')" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">I-IV-V-I (C)</button>
+      <button onclick="loadPreset('I-V-vi-IV')" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">I-V-vi-IV (Pop)</button>
+      <button onclick="loadPreset('ii-V-I')" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">ii-V-I (Jazz)</button>
+      <button onclick="loadPreset('blues')" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">12-Bar Blues</button>
+    </div>
+  </div>
+
+  <div id="status" class="mt-3 text-center text-sm text-gray-400"></div>
+</div>
+
+<script>
+let ctx = null;
+let progression = [];
+let isPlaying = false;
+let loopEnabled = false;
+let stopFlag = false;
+let currentStep = -1;
+
+// Chord definitions: [root, third, fifth] in MIDI numbers relative to C4=60
+const CHORDS = {
+  'C':  { notes: [60, 64, 67], type: 'major', color: '#ef4444' },
+  'Cm': { notes: [60, 63, 67], type: 'minor', color: '#b91c1c' },
+  'D':  { notes: [62, 66, 69], type: 'major', color: '#f97316' },
+  'Dm': { notes: [62, 65, 69], type: 'minor', color: '#c2410c' },
+  'E':  { notes: [64, 68, 71], type: 'major', color: '#eab308' },
+  'Em': { notes: [64, 67, 71], type: 'minor', color: '#a16207' },
+  'F':  { notes: [65, 69, 72], type: 'major', color: '#22c55e' },
+  'Fm': { notes: [65, 68, 72], type: 'minor', color: '#15803d' },
+  'G':  { notes: [67, 71, 74], type: 'major', color: '#3b82f6' },
+  'Gm': { notes: [67, 70, 74], type: 'minor', color: '#1d4ed8' },
+  'A':  { notes: [69, 73, 76], type: 'major', color: '#8b5cf6' },
+  'Am': { notes: [69, 72, 76], type: 'minor', color: '#6d28d9' },
+  'B':  { notes: [71, 75, 78], type: 'major', color: '#ec4899' },
+  'Bm': { notes: [71, 74, 78], type: 'minor', color: '#be185d' },
+  'G7': { notes: [67, 71, 74, 77], type: 'dom7', color: '#06b6d4' },
+  'C7': { notes: [60, 64, 67, 70], type: 'dom7', color: '#0891b2' },
+};
+
+function midiToFreq(midi) { return 440 * Math.pow(2, (midi - 69) / 12); }
+
+function ensureCtx() {
+  if (!ctx) ctx = new AudioContext();
+  if (ctx.state === 'suspended') ctx.resume();
+}
+
+function playChordNow(chord, duration = 0.8) {
+  ensureCtx();
+  const notes = CHORDS[chord].notes;
+  const masterGain = ctx.createGain();
+  masterGain.gain.setValueAtTime(0.3, ctx.currentTime);
+  masterGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  masterGain.connect(ctx.destination);
+
+  notes.forEach((midi, i) => {
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = midiToFreq(midi);
+    const gain = ctx.createGain();
+    gain.gain.value = 1 / notes.length;
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + duration);
+  });
+}
+
+function buildPalette() {
+  const div = document.getElementById('chordPalette');
+  div.innerHTML = '';
+  Object.entries(CHORDS).forEach(([name, chord]) => {
+    const btn = document.createElement('button');
+    btn.textContent = name;
+    btn.style.background = chord.color;
+    btn.className = 'py-2 rounded text-xs font-bold text-white transition-transform hover:scale-105 active:scale-95';
+    btn.setAttribute('aria-label', 'Add chord ' + name);
+    btn.onclick = () => addChord(name);
+    div.appendChild(btn);
+  });
+}
+
+function addChord(name) {
+  if (progression.length >= 8) return;
+  progression.push(name);
+  playChordNow(name, 0.5);
+  renderProgression();
+}
+
+function removeChord(i) { progression.splice(i, 1); renderProgression(); }
+function clearProgression() { progression = []; renderProgression(); }
+
+function renderProgression() {
+  const div = document.getElementById('progression');
+  div.innerHTML = progression.length === 0
+    ? '<span class="text-gray-500 text-sm self-center">Click chords above to add to progression</span>'
+    : progression.map((c, i) => {
+      const active = i === currentStep;
+      return `<div class="relative group cursor-pointer" onclick="previewChord(${i})">
+        <div class="px-3 py-3 rounded text-sm font-bold text-white transition-all ${active ? 'scale-110 ring-2 ring-white' : ''}" style="background:${CHORDS[c].color}">
+          ${c}
+        </div>
+        <button onclick="event.stopPropagation();removeChord(${i})" class="absolute -top-1 -right-1 bg-red-600 text-white rounded-full w-4 h-4 text-xs hidden group-hover:flex items-center justify-center" aria-label="Remove ${c}">×</button>
+      </div>`;
+    }).join('');
+}
+
+function previewChord(i) { playChordNow(progression[i], 0.8); }
+
+function toggleLoop() {
+  loopEnabled = !loopEnabled;
+  document.getElementById('loopBtn').textContent = 'Loop: ' + (loopEnabled ? 'ON' : 'OFF');
+  document.getElementById('loopBtn').className = loopEnabled
+    ? 'bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm'
+    : 'bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded text-sm';
+}
+
+async function playSequence() {
+  if (progression.length === 0) return;
+  const bpm = parseInt(document.getElementById('bpm').value) || 80;
+  const beatDuration = 60 / bpm;
+  const chordDuration = beatDuration * 2; // 2 beats per chord
+
+  do {
+    for (let i = 0; i < progression.length; i++) {
+      if (stopFlag) break;
+      currentStep = i;
+      renderProgression();
+      playChordNow(progression[i], chordDuration * 0.9);
+      await new Promise(r => setTimeout(r, chordDuration * 1000));
+    }
+  } while (loopEnabled && !stopFlag);
+
+  currentStep = -1;
+  isPlaying = false;
+  stopFlag = false;
+  renderProgression();
+  document.getElementById('playBtn').textContent = '▶ Play';
+  document.getElementById('playBtn').className = 'bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-sm font-medium';
+  document.getElementById('status').textContent = '';
+}
+
+function togglePlay() {
+  ensureCtx();
+  if (isPlaying) {
+    stopFlag = true;
+    isPlaying = false;
+    document.getElementById('playBtn').textContent = '▶ Play';
+    document.getElementById('playBtn').className = 'bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-sm font-medium';
+  } else {
+    if (progression.length === 0) { document.getElementById('status').textContent = 'Add chords first!'; return; }
+    isPlaying = true;
+    stopFlag = false;
+    document.getElementById('playBtn').textContent = '■ Stop';
+    document.getElementById('playBtn').className = 'bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm font-medium';
+    document.getElementById('status').textContent = 'Playing...';
+    playSequence();
+  }
+}
+
+const presets = {
+  'I-IV-V-I': ['C','F','G','C'],
+  'I-V-vi-IV': ['C','G','Am','F'],
+  'ii-V-I': ['Dm','G7','C','C'],
+  'blues': ['C7','C7','C7','C7','F','F','C','C','G','F','C','G'],
+};
+
+function loadPreset(name) {
+  progression = [...presets[name]].slice(0, 8);
+  renderProgression();
+}
+
+buildPalette();
+renderProgression();
+</script>
+</body>
+</html>
